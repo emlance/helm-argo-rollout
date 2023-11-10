@@ -1,0 +1,36 @@
+image: docker:24.0.5
+
+services:
+  - name: docker:dind
+    alias: docker
+
+stages:
+  - package
+  - deploy
+
+before_script:
+  - export HELM_CHART_VERSION=$(awk '/^version:/ {print $2}' app-name/Chart.yaml) #extract the helm chart version
+  - export HELM_CHART_NAME=$(awk 'NR==2 {print $2}' app-name/Chart.yaml) #extract the helm chart name
+
+package:
+  image: openstackmagnum/helm-client:v3.2.0
+  stage: package
+  script:
+    - helm package ./$HELM_CHART_NAME --version $HELM_CHART_VERSION
+    - export HELM_PACKAGE_FILENAME="${HELM_CHART_NAME}-${HELM_CHART_VERSION}.tgz"
+    - 'curl --request POST --user gitlab-ci-token:$CI_JOB_TOKEN --form "chart=@$HELM_PACKAGE_FILENAME" "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/helm/api/$HELM_CHART_NAME/charts"'
+    - echo "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/helm/$HELM_CHART_NAME"
+  when: manual
+
+deploy:
+  image: dtzar/helm-kubectl
+  stage: deploy
+  script:
+    - kubectl config use-context projects/gitops/kubernets-cluster:k8s-agent1 #replace this with your kubernetes context location
+    - helm repo add --username user@domain.com --password $CI_JOB_TOKEN $HELM_CHART_NAME ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/helm/$HELM_CHART_NAME
+    - helm repo list
+    - echo $CI_JOB_TOKEN $HELM_CHART_NAME ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/helm/$HELM_CHART_NAME
+    - helm repo update
+    - helm search repo $HELM_PACKAGE_FILENAME
+    - helm upgrade --install $HELM_CHART_NAME $HELM_CHART_NAME/$HELM_CHART_NAME --version $HELM_CHART_VERSION
+  when: manual
